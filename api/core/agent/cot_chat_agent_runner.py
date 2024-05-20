@@ -57,6 +57,12 @@ class CotChatAgentRunner(CotAgentRunner):
         query_messages = UserPromptMessage(content=self._query)
 
         if assistant_messages:
+            historic_messages = self._organize_historic_prompt_messages([
+                system_message,
+                query_messages,
+                *assistant_messages,
+                UserPromptMessage(content='continue')
+            ])            
             messages = [
                 system_message,
                 *historic_messages,
@@ -65,6 +71,7 @@ class CotChatAgentRunner(CotAgentRunner):
                 UserPromptMessage(content='continue')
             ]
         else:
+            historic_messages = self._organize_historic_prompt_messages([system_message, query_messages])
             messages = [system_message, *historic_messages, query_messages]
 
         # join all messages

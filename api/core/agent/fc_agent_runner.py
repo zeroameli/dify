@@ -20,16 +20,22 @@ from core.model_runtime.entities.message_entities import (
 from core.tools.entities.tool_entities import ToolInvokeMeta
 from core.tools.tool_engine import ToolEngine
 from models.model import Message
+from core.prompt.agent_history_prompt_transform import AgentHistoryPromptTransform
 
 logger = logging.getLogger(__name__)
 
 class FunctionCallAgentRunner(BaseAgentRunner):
+    _query: str = None
+    _current_thoughts: list[PromptMessage] = []
+
+
     def run(self, 
             message: Message, query: str, **kwargs: Any
     ) -> Generator[LLMResultChunk, None, None]:
         """
         Run FunctionCall agent application
         """
+        self._query = query
         app_generate_entity = self.application_generate_entity
 
         app_config = self.app_config
@@ -81,6 +87,7 @@ class FunctionCallAgentRunner(BaseAgentRunner):
             )
 
             # recalc llm max tokens
+            prompt_messages = self._organize_prompt_messages()
             self.recalc_llm_max_tokens(self.model_config, prompt_messages)
             # invoke model
             chunks: Union[Generator[LLMResultChunk, None, None], LLMResult] = model_instance.invoke_llm(
@@ -203,7 +210,7 @@ class FunctionCallAgentRunner(BaseAgentRunner):
             else:
                 assistant_message.content = response
             
-            prompt_messages.append(assistant_message)
+            self._current_thoughts.append(assistant_message)
 
             # save thought
             self.save_agent_thought(
@@ -408,6 +415,13 @@ class FunctionCallAgentRunner(BaseAgentRunner):
                     name=tool_call_name,
                 )
             )
+            self._current_thoughts.append(
+                ToolPromptMessage(
+                    content=tool_response,
+                    tool_call_id=tool_call_id,
+                    name=tool_call_name,
+                )
+            )
 
         return prompt_messages
     
@@ -428,4 +442,27 @@ class FunctionCallAgentRunner(BaseAgentRunner):
                         for content in prompt_message.content 
                     ])
 
+        return prompt_messages
+
+    def _organize_prompt_messages(self):
+        prompt_template = self.app_config.prompt_template.simple_prompt_template or ''
+        system_prompt_messages = self._init_system_message(prompt_template)
+        query_prompt_messages = self._organize_user_query(self._query, [])
+
+        self.history_prompt_messages = AgentHistoryPromptTransform(
+            model_config=self.model_config,
+            prompt_messages=[system_prompt_messages, query_prompt_messages, *self._current_thoughts],
+            history_messages=self.history_prompt_messages,
+            memory=self.memory
+        ).get_prompt()
+
+        prompt_messages = [
+            system_prompt_messages,
+            *self.history_prompt_messages,
+            query_prompt_messages,
+            *self._current_thoughts
+        ]
+        if len(self._current_thoughts) == 0:
+            # clear messages at the first iteration
+            prompt_messages = self._clear_user_prompt_image_messages(prompt_messages)
         return prompt_messages
